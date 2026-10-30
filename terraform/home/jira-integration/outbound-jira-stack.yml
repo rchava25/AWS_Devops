@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EventBridge → Lambda → Jira Outbound Integration for AWS DevOps Agent.
+  Creates Jira issues when investigations complete or fail.
+
+  Stack: outbound-jira-stack
+
+# ============================================================================
+# Parameters
+# ============================================================================
+Parameters:
+  JiraProjectKey:
+    Type: String
+    Default: KAN
+    Description: Jira project key where issues will be created.
+
+  JiraSecretName:
+    Type: String
+    Default: devops-agent/jira-credentials
+    Description: >
+      Name of the Secrets Manager secret containing Jira credentials.
+      Must contain keys: email, api_token, base_url.
+
+  AgentSpaceId:
+    Type: String
+    Default: UNSET
+    Description: >
+      AWS DevOps Agent Space ID for constructing investigation deep links in
+      the Jira issue. Optional — leave as UNSET if you don't need the link.
+
+  EventBusName:
+    Type: String
+    Default: default
+    Description: EventBridge bus name to monitor.
+
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+    MinValue: 5
+    MaxValue: 60
+    Description: Lambda function timeout in seconds.
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 256
+    AllowedValues: [128, 256, 512]
+    Description: Lambda function memory in MB.
+
+# ============================================================================
+# Resources
+# ============================================================================
+Resources:
+
+  # --------------------------------------------------------------------------
+  # Secrets Manager — Jira Credentials (placeholder values)
+  # --------------------------------------------------------------------------
+  JiraCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Ref JiraSecretName
+      Description: >
+        Jira Cloud credentials for the DevOps Agent outbound integration.
+        Contains: email, api_token, base_url.
+      SecretString: !Sub |
+        {
+          "email": "PLACEHOLDER_EMAIL@example.com",
+          "api_token": "PLACEHOLDER_API_TOKEN",
+          "base_url": "https://your-site.atlassian.net"
+        }
+      Tags:
+        - Key: Application
+          Value: DevOpsAgent
+        - Key: Component
+          Value: JiraOutbound
+
+  # --------------------------------------------------------------------------
+  # IAM Role — Lambda Execution Role
+  # --------------------------------------------------------------------------
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: devops-agent-jira-outbound-role
+      Description: >
+        Execution role for the DevOps Agent Jira outbound Lambda function.
+        Grants: CloudWatch Logs write, Secrets Manager read.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        # CloudWatch Logs — write log streams
+        - PolicyName: CloudWatchLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/devops-agent-jira-outbound:*'
+        # Secrets Manager — read Jira credentials
+        - PolicyName: SecretsManagerReadPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref JiraCredentialsSecret
+      Tags:
+        - Key: Application
+          Value: DevOpsAgent
+        - Key: Component
+          Value: JiraOutbound
+
+  # --------------------------------------------------------------------------
+  # Lambda Function — Jira Issue Creator
+  # --------------------------------------------------------------------------
+  JiraOutboundFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: devops-agent-jira-outbound
+      Description: >
+        Receives EventBridge events from AWS DevOps Agent and creates
+        corresponding Jira issues via REST API.
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Code:
+        ZipFile: |
+          # Inline stub — replaced by deploy script with actual code from lambda/handler.py
+          # This placeholder ensures the stack deploys; the deploy script updates with real code.
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "Placeholder — deploy script will update"}
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemorySize
+      Environment:
+        Variables:
+          JIRA_SECRET_NAME: !Ref JiraSecretName
+          JIRA_PROJECT_KEY: !Ref JiraProjectKey
+          AGENT_SPACE_ID: !Ref AgentSpaceId
+      ReservedConcurrentExecutions: 5
+      Tags:
+        - Key: Application
+          Value: DevOpsAgent
+        - Key: Component
+          Value: JiraOutbound
+
+  # --------------------------------------------------------------------------
+  # Lambda Permission — Allow EventBridge to invoke
+  # --------------------------------------------------------------------------
+  EventBridgeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JiraOutboundFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DevOpsAgentEventRule.Arn
+
+  # --------------------------------------------------------------------------
+  # EventBridge Rule — Match DevOps Agent investigation events
+  # --------------------------------------------------------------------------
+  DevOpsAgentEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: devops-agent-investigation-to-jira
+      Description: >
+        Matches investigation events from the AWS DevOps Agent
+        and routes them to the Jira outbound Lambda function.
+      EventBusName: !Ref EventBusName
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.aidevops
+        detail-type:
+          - "Investigation Completed"
+          - "Investigation Failed"
+      Targets:
+        - Id: JiraOutboundLambdaTarget
+          Arn: !GetAtt JiraOutboundFunction.Arn
+
+  # --------------------------------------------------------------------------
+  # CloudWatch Log Group — Lambda logs with retention
+  # --------------------------------------------------------------------------
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${JiraOutboundFunction}'
+      RetentionInDays: 30
+      Tags:
+        - Key: Application
+          Value: DevOpsAgent
+        - Key: Component
+          Value: JiraOutbound
+
+# ============================================================================
+# Outputs
+# ============================================================================
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the Jira outbound Lambda function
+    Value: !GetAtt JiraOutboundFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaArn'
+
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !Ref JiraOutboundFunction
+
+  EventRuleArn:
+    Description: ARN of the EventBridge rule
+    Value: !GetAtt DevOpsAgentEventRule.Arn
+
+  SecretArn:
+    Description: ARN of the Jira credentials secret
+    Value: !Ref JiraCredentialsSecret
+
+  LambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt LambdaExecutionRole.Arn

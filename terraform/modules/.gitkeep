@@ -1,0 +1,7 @@
+# This directory contains Terraform modules for the unified DevOps Agent Workshop
+# Modules:
+# - vpc/           - Shared VPC for both ECS and EKS
+# - ecs/           - ECS cluster and services
+# - eks/           - EKS cluster and addons
+# - dependencies/  - Shared backends (RDS, DynamoDB, ElastiCache, MQ)
+# - security-groups/ - Shared security groups
